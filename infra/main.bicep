@@ -20,11 +20,18 @@ param applicationInsightsName string = 'appi-copilot-monitoring'
 
 @minLength(1)
 @maxLength(23)
-@description('Globally unique Azure Managed Grafana name. The default is deterministic for this subscription.')
-param grafanaName string = 'amg-cop-${uniqueString(subscription().subscriptionId)}'
+@description('Use auto to generate a deterministic, subscription-unique Managed Grafana name, or enter a custom globally unique name.')
+param grafanaName string = 'auto'
 
-@description('Object ID that receives Grafana Admin at Grafana-resource scope. Defaults to the identity running this deployment; clear it to skip the assignment.')
-param grafanaAdminPrincipalId string = deployer().objectId
+@description('Use current-deployer to grant Grafana Admin to the deployment identity, enter another principal object ID, or clear the value to skip the assignment.')
+param grafanaAdminPrincipalId string = 'current-deployer'
+
+var effectiveGrafanaName = toLower(grafanaName) == 'auto'
+  ? 'amg-cop-${uniqueString(subscription().subscriptionId)}'
+  : grafanaName
+var effectiveGrafanaAdminPrincipalId = toLower(grafanaAdminPrincipalId) == 'current-deployer'
+  ? deployer().objectId
+  : grafanaAdminPrincipalId
 
 resource monitoringResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
@@ -38,8 +45,8 @@ module monitoring 'resources.bicep' = {
     location: resourceLocation
     logAnalyticsWorkspaceName: logAnalyticsWorkspaceName
     applicationInsightsName: applicationInsightsName
-    grafanaName: grafanaName
-    grafanaAdminPrincipalId: grafanaAdminPrincipalId
+    grafanaName: effectiveGrafanaName
+    grafanaAdminPrincipalId: effectiveGrafanaAdminPrincipalId
   }
 }
 

@@ -73,9 +73,10 @@ organization's data-handling requirements first.
 
 The **Deploy to Azure** button deploys the cloud resources from `infra/azuredeploy.json`.
 
-The form suggests a deterministic, subscription-unique Grafana name and defaults **Grafana Admin
-Principal Id** to the identity launching the deployment. You can override either value; clear the
-principal ID only if you intentionally want to skip the Grafana Admin assignment.
+Leave **Grafana Name** as `auto` to generate a deterministic, subscription-unique name. Leave
+**Grafana Admin Principal Id** as `current-deployer` to grant access to the identity launching the
+deployment. You can override either value; clear the principal ID only if you intentionally want to
+skip the Grafana Admin assignment.
 
 Azure Portal's **Region** stores the subscription-level deployment record. **Resource Location**
 controls where the monitoring resources are created; the two values may differ.

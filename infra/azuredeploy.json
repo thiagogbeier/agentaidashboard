@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "2333641418590729124"
+      "templateHash": "14144584343859906739"
     }
   },
   "parameters": {
@@ -45,20 +45,24 @@
     },
     "grafanaName": {
       "type": "string",
-      "defaultValue": "[format('amg-cop-{0}', uniqueString(subscription().subscriptionId))]",
+      "defaultValue": "auto",
       "minLength": 1,
       "maxLength": 23,
       "metadata": {
-        "description": "Globally unique Azure Managed Grafana name. The default is deterministic for this subscription."
+        "description": "Use auto to generate a deterministic, subscription-unique Managed Grafana name, or enter a custom globally unique name."
       }
     },
     "grafanaAdminPrincipalId": {
       "type": "string",
-      "defaultValue": "[deployer().objectId]",
+      "defaultValue": "current-deployer",
       "metadata": {
-        "description": "Object ID that receives Grafana Admin at Grafana-resource scope. Defaults to the identity running this deployment; clear it to skip the assignment."
+        "description": "Use current-deployer to grant Grafana Admin to the deployment identity, enter another principal object ID, or clear the value to skip the assignment."
       }
     }
+  },
+  "variables": {
+    "effectiveGrafanaName": "[if(equals(toLower(parameters('grafanaName')), 'auto'), format('amg-cop-{0}', uniqueString(subscription().subscriptionId)), parameters('grafanaName'))]",
+    "effectiveGrafanaAdminPrincipalId": "[if(equals(toLower(parameters('grafanaAdminPrincipalId')), 'current-deployer'), deployer().objectId, parameters('grafanaAdminPrincipalId'))]"
   },
   "resources": [
     {
@@ -88,10 +92,10 @@
             "value": "[parameters('applicationInsightsName')]"
           },
           "grafanaName": {
-            "value": "[parameters('grafanaName')]"
+            "value": "[variables('effectiveGrafanaName')]"
           },
           "grafanaAdminPrincipalId": {
-            "value": "[parameters('grafanaAdminPrincipalId')]"
+            "value": "[variables('effectiveGrafanaAdminPrincipalId')]"
           }
         },
         "template": {

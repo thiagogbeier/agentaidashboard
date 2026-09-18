@@ -24,11 +24,11 @@ The script is idempotent. Running it again with the same parameters reconciles t
 The Deploy to Azure button uses `infra/azuredeploy.json`, compiled from `infra/main.bicep`.
 
 Portal deployment creates the resource group, Log Analytics, Application Insights, Managed Grafana,
-and managed-identity access. The Grafana name defaults to a deterministic name derived from the
-subscription ID. The Grafana Admin principal defaults to the deployment caller through Bicep's
-`deployer().objectId`; clear it only to skip that assignment. Portal deployment cannot configure a
-user's workstation. Run the PowerShell script afterward with matching names to complete the
-dashboard and local components.
+and managed-identity access. Leave the Grafana name as `auto` to generate a deterministic name from
+the subscription ID. Leave the Grafana Admin principal as `current-deployer` to resolve the
+deployment caller through Bicep's `deployer().objectId`; clear it only to skip that assignment.
+Portal deployment cannot configure a user's workstation. Run the PowerShell script afterward with
+matching names to complete the dashboard and local components.
 
 The Portal **Region** selector is the location of the subscription-scope deployment record.
 **Resource Location** is the region used by the deployed monitoring resources. These may differ.
