@@ -81,15 +81,22 @@ skip the Grafana Admin assignment.
 Azure Portal's **Region** stores the subscription-level deployment record. **Resource Location**
 controls where the monitoring resources are created; the two values may differ.
 
-After a Portal deployment, clone the repository and run `scripts/Deploy.ps1` with the same names.
-The script is idempotent and completes the local Collector, dashboard import/defaults, user-scoped
-settings, and status checks.
+![Custom deployment form showing default values: Region "(US) North Central US", Resource Location "canadacentral", Resource Group Name "rg-copilot-monitoring", Log Analytics Workspace Name "law-copilot-monitoring", Application Insights Name "appi-copilot-monitoring", Grafana Name "auto", Grafana Admin Principal Id "current-deployer"](docs/images/portal-deploy-defaults.png)
 
-If you left the Portal fields at their defaults (**Grafana Name** = `auto`, **Grafana Admin Principal
-Id** = `current-deployer`, default resource group/workspace/App Insights names), no parameters are
-needed — `Deploy.ps1` resolves the identical names automatically. `infra/main.bicep`'s `auto` option
-computes the Grafana name as `amg-cop-<uniqueString(subscriptionId)>`, the same deterministic formula
-used by `infra/azuredeploy.json`, so re-running against the same subscription always matches:
+Leaving every field at its default, as shown above, is the recommended path:
+
+- **Region** (`(US) North Central US`) only stores the subscription-level deployment record and does
+  not affect where resources are created — ignore it.
+- **Resource Location** (`canadacentral`) is what actually matters: the resource group, Log Analytics
+  workspace, Application Insights, and Grafana are all created there.
+- **Resource Group Name**, **Log Analytics Workspace Name**, and **Application Insights Name** keep
+  their shown defaults (`rg-copilot-monitoring`, `law-copilot-monitoring`, `appi-copilot-monitoring`).
+- **Grafana Name** = `auto` generates the deterministic name `amg-cop-<uniqueString(subscriptionId)>`.
+- **Grafana Admin Principal Id** = `current-deployer` grants Grafana Admin to whichever identity is
+  signed in to the Portal when you click **Review + create**.
+
+These are exactly `Deploy.ps1`'s own parameter defaults, so with this form unchanged you can complete
+the deployment with a single command and no name overrides:
 
 ```powershell
 git clone https://github.com/thiagogbeier/agentaidashboard.git
@@ -97,8 +104,13 @@ cd agentaidashboard
 pwsh -NoProfile -File .\scripts\Deploy.ps1 -SubscriptionId '<subscription-guid>'
 ```
 
-Only pass explicit overrides if you changed a Portal field away from its default — match each
-parameter to the value you typed:
+After a Portal deployment, clone the repository and run `scripts/Deploy.ps1` with the same names.
+The script is idempotent and completes the local Collector, dashboard import/defaults, user-scoped
+settings, and status checks.
+
+If you changed any field away from its default in the Portal, pass matching overrides to
+`Deploy.ps1` instead of the single-parameter command above — match each parameter to the value you
+typed:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\Deploy.ps1 `
