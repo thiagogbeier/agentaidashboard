@@ -85,6 +85,32 @@ After a Portal deployment, clone the repository and run `scripts/Deploy.ps1` wit
 The script is idempotent and completes the local Collector, dashboard import/defaults, user-scoped
 settings, and status checks.
 
+If you left the Portal fields at their defaults (**Grafana Name** = `auto`, **Grafana Admin Principal
+Id** = `current-deployer`, default resource group/workspace/App Insights names), no parameters are
+needed — `Deploy.ps1` resolves the identical names automatically. `infra/main.bicep`'s `auto` option
+computes the Grafana name as `amg-cop-<uniqueString(subscriptionId)>`, the same deterministic formula
+used by `infra/azuredeploy.json`, so re-running against the same subscription always matches:
+
+```powershell
+git clone https://github.com/thiagogbeier/agentaidashboard.git
+cd agentaidashboard
+pwsh -NoProfile -File .\scripts\Deploy.ps1 -SubscriptionId '<subscription-guid>'
+```
+
+Only pass explicit overrides if you changed a Portal field away from its default — match each
+parameter to the value you typed:
+
+```powershell
+pwsh -NoProfile -File .\scripts\Deploy.ps1 `
+  -SubscriptionId '<subscription-guid>' `
+  -Location 'eastus' `
+  -ResourceGroupName '<value typed for Resource Group Name>' `
+  -GrafanaName '<value typed for Grafana Name, omit if left as auto>'
+```
+
+`Deploy.ps1` has no parameter for **Grafana Admin Principal Id**; it always grants Grafana Admin to the
+currently signed-in `az` identity, matching the Portal's `current-deployer` default.
+
 The repository is public, so Azure Portal can download the ARM template directly from the button.
 The Portal may summarize the template as **2 resources** because it counts the resource group and
 its nested deployment at subscription scope; the nested deployment contains the monitoring
