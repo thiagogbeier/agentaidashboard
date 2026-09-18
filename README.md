@@ -34,17 +34,58 @@ Application Insights -> Log Analytics -> Azure Managed Grafana
 - VS Code and GitHub Copilot CLI telemetry settings
 - Persistent Windows Scheduled Task for the Collector
 
-## Recommended: one-command PowerShell deployment
+## Recommended: guided PowerShell deployment
 
-### Requirements
+### 1. Install the prerequisites
 
-- Windows 10/11
-- PowerShell 7+
-- Azure CLI
-- Permission to create resources and role assignments in an Azure subscription
-- VS Code with GitHub Copilot Chat and/or GitHub Copilot CLI
+You need:
 
-### Deploy
+- A 64-bit Windows 10 or Windows 11 computer
+- [Git for Windows](https://git-scm.com/download/win)
+- [PowerShell 7 or later](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows)
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli-windows)
+- An Azure subscription where your account can create resources and role assignments
+- Internet access to GitHub, Azure, and `grafana.com`
+- [Visual Studio Code](https://code.visualstudio.com/) with
+  [GitHub Copilot Chat](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat),
+  [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/set-up/install-copilot-cli), or both
+
+For Azure permissions, the simplest option is **Owner** on the target subscription. Alternatively,
+you need permissions to create the resources plus `Microsoft.Authorization/roleAssignments/write`
+at the resource group and Managed Grafana scopes. Ask your Azure administrator if you are unsure.
+
+You can install Git, PowerShell, and Azure CLI from Windows Terminal or Windows PowerShell with:
+
+```powershell
+winget install --id Git.Git --exact
+winget install --id Microsoft.PowerShell --exact
+winget install --id Microsoft.AzureCLI --exact
+```
+
+Close and reopen the terminal after installation. Then confirm that all three commands work:
+
+```powershell
+git --version
+pwsh --version
+az version
+```
+
+### 2. Sign in to Azure and select a subscription
+
+Open **PowerShell 7** and run:
+
+```powershell
+az login
+az account list --output table
+az account set --subscription '<subscription-name-or-guid>'
+az account show --output table
+```
+
+The last command must show the subscription where you want to create the dashboard resources. Use
+an interactive user account rather than a service principal because the deployment grants that
+signed-in user access to Grafana.
+
+### 3. Download and run the deployment
 
 ```powershell
 git clone https://github.com/thiagogbeier/agentaidashboard.git
@@ -52,8 +93,21 @@ cd agentaidashboard
 pwsh -NoProfile -File .\scripts\Deploy.ps1
 ```
 
-The script performs read-only discovery, prints the complete deployment plan, and changes nothing
-unless you type exactly `YES`.
+The script first performs read-only discovery and prints the complete deployment plan. Check the
+subscription, region, resource names, cost notice, and content-capture setting. If they are correct,
+type exactly `YES` and press Enter. Any other response cancels without making changes.
+
+The deployment can take several minutes. Keep the PowerShell window open until it displays
+`Deployment completed successfully` and prints the **Grafana**, **Dashboard**, and **Status** paths.
+The script also:
+
+- creates or updates the Azure resources;
+- installs the Azure Managed Grafana CLI extension;
+- imports and configures dashboard `25053`;
+- downloads and verifies the OpenTelemetry Collector;
+- updates the current user's VS Code settings, backing up an existing `settings.json`;
+- sets user-level environment variables for GitHub Copilot CLI; and
+- starts the Collector as the `AgentAIDashboard-OtelCollector` Scheduled Task.
 
 Common overrides:
 
@@ -69,9 +123,52 @@ Common overrides:
 `CaptureContent` defaults to `false`. Enabling it may export prompt/response content; review your
 organization's data-handling requirements first.
 
+### 4. Restart Copilot and generate the first telemetry
+
+After deployment:
+
+1. Close **all** VS Code windows, then reopen VS Code. A full restart is required for Copilot Chat to
+   load the new telemetry settings.
+2. If you use GitHub Copilot CLI, close the old terminal and open a new one so it receives the new
+   environment variables.
+3. Make sure VS Code is signed in to GitHub and Copilot Chat is working.
+4. Send a new prompt in Copilot Chat, or start GitHub Copilot CLI and submit a prompt.
+5. Wait a few minutes for the Collector, Application Insights, and Grafana to ingest the first
+   events.
+
+Prompt and response text is not collected unless you explicitly deploy with `-CaptureContent $true`.
+Operational telemetry such as traces, requests, dependencies, and metrics is still collected.
+
+### 5. Verify the installation
+
+From the cloned repository, run:
+
+```powershell
+.\scripts\Status.ps1 -Open
+```
+
+The generated `status.html` checks the active Azure subscription, Azure resources, Grafana
+dashboard, recent telemetry, Scheduled Task, local Collector files, OTLP listener ports, VS Code
+settings, and Copilot CLI environment variables.
+
+Open the **Dashboard** URL printed by `Deploy.ps1`. Sign in with the same Azure account if prompted.
+If the dashboard initially shows **No data**, wait a few more minutes, generate another Copilot
+prompt, and run the status command again. See
+[Troubleshooting](docs/TROUBLESHOOTING.md) if any status item still fails.
+
 ## Azure Portal deployment
 
-The **Deploy to Azure** button deploys the cloud resources from `infra/azuredeploy.json`.
+The **Deploy to Azure** button is an alternative way to create the Azure resources. It does **not**
+configure VS Code, GitHub Copilot CLI, the local Collector, or the Grafana dashboard by itself.
+
+1. Select **Deploy to Azure** at the top of this README.
+2. Sign in to Azure if prompted and select the intended subscription.
+3. Leave the fields at their defaults for the simplest setup, or change **Resource Location** to your
+   preferred Azure region.
+4. Select **Review + create**, wait for validation to pass, then select **Create**.
+5. Wait until Azure reports that the deployment completed successfully.
+6. Complete the workstation setup by following steps 1 and 2 above, cloning this repository, and
+   running `Deploy.ps1` as shown below.
 
 Leave **Grafana Name** as `auto` to generate a deterministic, subscription-unique name. Leave
 **Grafana Admin Principal Id** as `current-deployer` to grant access to the identity launching the
@@ -96,11 +193,13 @@ Leaving every field at its default, as shown above, is the recommended path:
   signed in to the Portal when you click **Review + create**.
 
 These are exactly `Deploy.ps1`'s own parameter defaults, so with this form unchanged you can complete
-the deployment with a single command and no name overrides:
+the local setup with the subscription ID and no name overrides:
 
 ```powershell
 git clone https://github.com/thiagogbeier/agentaidashboard.git
 cd agentaidashboard
+az login
+az account set --subscription '<subscription-guid>'
 pwsh -NoProfile -File .\scripts\Deploy.ps1 -SubscriptionId '<subscription-guid>'
 ```
 
@@ -117,6 +216,8 @@ pwsh -NoProfile -File .\scripts\Deploy.ps1 `
   -SubscriptionId '<subscription-guid>' `
   -Location 'eastus' `
   -ResourceGroupName '<value typed for Resource Group Name>' `
+  -LogAnalyticsWorkspaceName '<value typed for Log Analytics Workspace Name>' `
+  -ApplicationInsightsName '<value typed for Application Insights Name>' `
   -GrafanaName '<value typed for Grafana Name, omit if left as auto>'
 ```
 
@@ -128,7 +229,10 @@ The Portal may summarize the template as **2 resources** because it counts the r
 its nested deployment at subscription scope; the nested deployment contains the monitoring
 resources and role assignments listed above.
 
-## Verify
+## Ongoing verification
+
+If you already followed the guided PowerShell deployment, this repeats the verification command for
+future checks:
 
 ```powershell
 .\scripts\Status.ps1 -Open
@@ -138,6 +242,41 @@ The generated `status.html` checks Azure resources, the Grafana dashboard, recen
 Scheduled Task, OTLP listener ports, and Copilot CLI settings.
 
 For direct Azure verification, use the queries in [docs/KQL.md](docs/KQL.md).
+
+## Remove the deployment and stop Azure charges
+
+Deleting the local repository does not delete the billable Azure resources. When you no longer need
+the dashboard, delete its resource group:
+
+```powershell
+az group delete --name 'rg-copilot-monitoring' --yes --no-wait
+```
+
+Replace `rg-copilot-monitoring` if you selected a different resource group name. Then remove the
+local Scheduled Task and generated Collector files from the cloned repository:
+
+```powershell
+Unregister-ScheduledTask -TaskName 'AgentAIDashboard-OtelCollector' -Confirm:$false
+Remove-Item .\otelcol -Recurse -Force
+Remove-Item .\otel-collector-config.yaml, .\status.html, .\.state -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+The script creates a backup of existing VS Code settings at
+`%APPDATA%\Code\User\settings.json.agent-ai-dashboard.bak`. Restore that backup or manually remove
+`github.copilot.chat.otel.enabled`, `github.copilot.chat.otel.exporterType`,
+`github.copilot.chat.otel.otlpEndpoint`, and `github.copilot.chat.otel.captureContent` from
+**Preferences: Open User Settings (JSON)** if you no longer want VS Code to export telemetry.
+
+Remove the Copilot CLI telemetry environment variables with:
+
+```powershell
+[Environment]::SetEnvironmentVariable('COPILOT_OTEL_ENABLED', $null, 'User')
+[Environment]::SetEnvironmentVariable('COPILOT_OTEL_EXPORTER_TYPE', $null, 'User')
+[Environment]::SetEnvironmentVariable('OTEL_EXPORTER_OTLP_ENDPOINT', $null, 'User')
+```
+
+Close and reopen VS Code and any terminal windows afterward. See
+[Deployment details](docs/DEPLOYMENT.md) for more information.
 
 ## Repository layout
 
