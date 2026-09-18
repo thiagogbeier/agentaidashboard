@@ -182,3 +182,13 @@ For direct Azure verification, use the queries in [docs/KQL.md](docs/KQL.md).
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Contributing](docs/CONTRIBUTING.md)
 - [License](LICENSE)
+
+## Credits
+
+- [Wuyi Weng](https://www.linkedin.com/in/wuyi-weng-a8366369/)
+- [Anthony Bartolo](https://www.linkedin.com/in/wirelesslife/)
+
+## References
+
+- [Dashboards are for AI agents too, not just humans](https://techcommunity.microsoft.com/blog/appsonazureblog/dashboards-are-for-ai-agents-too-not-just-humans/4556383)
+- [Deploy to Azure button](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-to-azure-button)
