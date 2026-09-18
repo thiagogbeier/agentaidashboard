@@ -12,14 +12,18 @@
    no name is supplied.
 5. Displays every Azure and local setting.
 6. Runs subscription-scope Bicep `what-if`.
-7. Requires typing `YES`, case-insensitively, after the user reviews the preview.
-8. Registers the required Azure providers.
-9. Deploys or reconciles the Azure resources.
-10. Imports Grafana dashboard `25053` when missing and saves its resource defaults.
-11. Downloads OpenTelemetry Collector Contrib v0.161.0 and validates its SHA-256 checksum.
-12. Configures VS Code Copilot Chat and GitHub Copilot CLI.
-13. Registers `AgentAIDashboard-OtelCollector` as an at-logon Scheduled Task.
-14. Writes ignored local deployment state and generates `status.html`.
+7. For an existing deployment, writes its discovered state into this repository and runs
+   `Status.ps1`.
+8. Requires typing `YES`, case-insensitively, after the user reviews the preview and status.
+9. Registers the required Azure providers.
+10. Deploys or reconciles the Azure resources.
+11. Imports Grafana dashboard `25053` when missing and saves its resource defaults.
+12. Reuses a compatible running Collector or downloads OpenTelemetry Collector Contrib v0.161.0
+    and validates its SHA-256 checksum.
+13. Configures VS Code Copilot Chat and GitHub Copilot CLI.
+14. Registers `AgentAIDashboard-OtelCollector` as an at-logon Scheduled Task when no compatible task
+    already exists.
+15. Refreshes the ignored local deployment state and generates `reports\status.html`.
 
 The script is idempotent. Running it again reconciles the deployment without creating another
 monitoring resource when the target resource group already contains one of that type.
@@ -63,7 +67,7 @@ Remove local runtime components:
 ```powershell
 Unregister-ScheduledTask -TaskName AgentAIDashboard-OtelCollector -Confirm:$false
 Remove-Item .\otelcol -Recurse -Force
-Remove-Item .\otel-collector-config.yaml, .\status.html -Force -ErrorAction SilentlyContinue
+Remove-Item .\otel-collector-config.yaml, .\reports -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
 The deployment script creates a backup of existing VS Code settings before changing OTel keys.

@@ -95,8 +95,9 @@ pwsh -NoProfile -File .\scripts\Deploy.ps1
 
 The script first performs read-only discovery, prints the complete deployment plan, and runs Azure
 `what-if`. Review both the plan and the resource changes. If they are correct, type `YES` and press
-Enter; capitalization does not matter. Any other response cancels without making Azure deployment
-or workstation changes.
+Enter; capitalization does not matter. For an existing Azure deployment, the script saves the
+discovered state in this repository and runs `Status.ps1` before asking for confirmation. Any other
+response cancels without making Azure deployment or runtime configuration changes.
 
 The deployment can take several minutes. Keep the PowerShell window open until it displays
 `Deployment completed successfully` and prints the **Grafana**, **Dashboard**, and **Status** paths.
@@ -120,6 +121,13 @@ The script also:
 > Application Insights resource, and one Log Analytics workspace. The script reuses their actual
 > names. It stops before `what-if` if a resource is missing, multiple resources of the same type
 > exist, or an explicitly supplied name does not match.
+>
+> **The Collector is not committed to Git.** On a new workstation, it is downloaded into
+> `otelcol\` only after the user approves the `what-if` plan. The generated
+> `otel-collector-config.yaml` is also local and ignored because it contains the Application
+> Insights ingestion connection string. If ports 4317 and 4318 are already served by a compatible
+> Collector targeting the same Application Insights resource, the script verifies and reuses that
+> runtime regardless of its installation folder.
 
 Common overrides for a new deployment:
 
@@ -142,7 +150,8 @@ After deployment:
 1. Close **all** VS Code windows, then reopen VS Code. A full restart is required for Copilot Chat to
    load the new telemetry settings.
 2. If you use GitHub Copilot CLI, close the old terminal and open a new one so it receives the new
-   environment variables.
+   environment variables. Running Copilot CLI from a terminal that was already open before setup
+   produces no `github-copilot` telemetry, so the Grafana **Copilot CLI** filter will be empty.
 3. Make sure VS Code is signed in to GitHub and Copilot Chat is working.
 4. Send a new prompt in Copilot Chat, or start GitHub Copilot CLI and submit a prompt.
 5. Wait a few minutes for the Collector, Application Insights, and Grafana to ingest the first
@@ -159,7 +168,7 @@ From the cloned repository, run:
 .\scripts\Status.ps1 -Open
 ```
 
-The generated `status.html` checks the active Azure subscription, Azure resources, Grafana
+The generated `reports\status.html` checks the active Azure subscription, Azure resources, Grafana
 dashboard, recent telemetry, Scheduled Task, local Collector files, OTLP listener ports, VS Code
 settings, and Copilot CLI environment variables.
 
@@ -257,7 +266,7 @@ future checks:
 .\scripts\Status.ps1 -Open
 ```
 
-The generated `status.html` checks Azure resources, the Grafana dashboard, recent telemetry, the
+The generated `reports\status.html` checks Azure resources, the Grafana dashboard, recent telemetry, the
 Scheduled Task, OTLP listener ports, and Copilot CLI settings.
 
 For direct Azure verification, open the deployed Application Insights resource in Azure Portal,
@@ -298,7 +307,7 @@ local Scheduled Task and generated Collector files from the cloned repository:
 ```powershell
 Unregister-ScheduledTask -TaskName 'AgentAIDashboard-OtelCollector' -Confirm:$false
 Remove-Item .\otelcol -Recurse -Force
-Remove-Item .\otel-collector-config.yaml, .\status.html, .\.state -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item .\otel-collector-config.yaml, .\reports, .\.state -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
 The script creates a backup of existing VS Code settings at
@@ -339,6 +348,10 @@ Close and reopen VS Code and any terminal windows afterward. See
 |   |-- azuredeploy.json
 |   |-- main.bicep
 |   `-- resources.bicep
+|-- otelcol/
+|   `-- README.md
+|-- reports/
+|   `-- README.md
 |-- scripts/
 |   |-- Deploy.ps1
 |   `-- Status.ps1

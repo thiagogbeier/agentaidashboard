@@ -3,9 +3,11 @@ infra/*.bicep.lock
 
 # Local deployment/runtime state
 .state/
-otelcol/
+otelcol/*
+!otelcol/README.md
 otel-collector-config.yaml
-status.html
+reports/*
+!reports/README.md
 *.log
 *.bak
 *.tmp

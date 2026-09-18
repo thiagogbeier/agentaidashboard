@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [switch]$Open
+    [switch]$Open,
+    [string]$SubscriptionId,
+    [string]$ResourceGroupName = 'rg-copilot-monitoring'
 )
 
 Set-StrictMode -Version Latest
@@ -8,13 +10,8 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $statePath = Join-Path $repositoryRoot '.state\deployment.json'
-$outputPath = Join-Path $repositoryRoot 'status.html'
-
-if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
-    throw "Local deployment state was not found. An Azure Portal deployment creates only the Azure resources. Run scripts\Deploy.ps1 to validate and reuse the existing resources, configure this workstation, and generate the state file."
-}
-
-$state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+$reportsDirectory = Join-Path $repositoryRoot 'reports'
+$outputPath = Join-Path $reportsDirectory 'status.html'
 $checks = [System.Collections.Generic.List[object]]::new()
 $checkedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
 
@@ -53,6 +50,104 @@ function Invoke-AzJson {
         throw "az $($Arguments -join ' ') failed: $($output -join [Environment]::NewLine)"
     }
     return (($output -join [Environment]::NewLine) | ConvertFrom-Json)
+}
+
+function Get-SingleActiveResource {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$Resources,
+
+        [Parameter(Mandatory)]
+        [string]$ResourceType,
+
+        [Parameter(Mandatory)]
+        [string]$ResourceLabel
+    )
+
+    $matchingResources = @($Resources | Where-Object type -eq $ResourceType)
+    $activeResources = foreach ($resource in $matchingResources) {
+        try {
+            $details = Invoke-AzJson @(
+                'resource', 'show',
+                '--ids', [string]$resource.id,
+                '--output', 'json'
+            )
+        }
+        catch {
+            if ($_.Exception.Message -match 'ResourceNotFound|could not be found|was not found') {
+                Write-Warning "Ignoring stale $ResourceLabel '$($resource.name)' because it no longer exists."
+                continue
+            }
+            throw
+        }
+
+        $provisioningStateProperty = $details.properties.PSObject.Properties['provisioningState']
+        if ($null -ne $provisioningStateProperty -and
+            $provisioningStateProperty.Value -in 'Deleting', 'Deleted') {
+            Write-Warning "Ignoring $ResourceLabel '$($details.name)' because it is $($provisioningStateProperty.Value)."
+            continue
+        }
+        $details
+    }
+
+    $activeResources = @($activeResources)
+    if ($activeResources.Count -eq 0) {
+        throw "No active $ResourceLabel was found in resource group '$ResourceGroupName'."
+    }
+    if ($activeResources.Count -gt 1) {
+        throw "Multiple active ${ResourceLabel}s were found in resource group '$ResourceGroupName': $($activeResources.name -join ', ')."
+    }
+    return $activeResources[0]
+}
+
+$stateWasDiscovered = -not (Test-Path -LiteralPath $statePath -PathType Leaf)
+if ($stateWasDiscovered) {
+    if ($null -eq (Get-Command az -ErrorAction SilentlyContinue)) {
+        throw 'Azure CLI is required to discover an existing deployment.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {
+        & az account set --subscription $SubscriptionId
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not select Azure subscription '$SubscriptionId'."
+        }
+    }
+
+    $discoveryAccount = Invoke-AzJson @('account', 'show', '--output', 'json')
+    $resources = @(Invoke-AzJson @(
+            'resource', 'list',
+            '--resource-group', $ResourceGroupName,
+            '--output', 'json'
+        ))
+    $workspace = Get-SingleActiveResource `
+        -Resources $resources `
+        -ResourceType 'Microsoft.OperationalInsights/workspaces' `
+        -ResourceLabel 'Log Analytics workspace'
+    $applicationInsights = Get-SingleActiveResource `
+        -Resources $resources `
+        -ResourceType 'Microsoft.Insights/components' `
+        -ResourceLabel 'Application Insights resource'
+    $grafana = Get-SingleActiveResource `
+        -Resources $resources `
+        -ResourceType 'Microsoft.Dashboard/grafana' `
+        -ResourceLabel 'Managed Grafana resource'
+
+    $state = [pscustomobject]@{
+        subscriptionId = [string]$discoveryAccount.id
+        tenantId = [string]$discoveryAccount.tenantId
+        subscriptionName = [string]$discoveryAccount.name
+        resourceGroupName = $ResourceGroupName
+        logAnalyticsWorkspaceName = [string]$workspace.name
+        applicationInsightsName = [string]$applicationInsights.name
+        grafanaName = [string]$grafana.name
+        collectorTaskName = 'AgentAIDashboard-OtelCollector'
+    }
+}
+else {
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+}
+
+if ($stateWasDiscovered) {
+    Add-Check 'Local deployment state' 'Local' 'warning' "No local state file exists; Azure resources were discovered read-only in $ResourceGroupName." 'Run scripts\Deploy.ps1, review what-if, and confirm to configure this workstation.'
 }
 
 try {
@@ -164,31 +259,82 @@ catch {
     Add-Check 'Recent telemetry' 'Azure' 'fail' $_.Exception.Message
 }
 
-$task = Get-ScheduledTask -TaskName ([string]$state.collectorTaskName) -ErrorAction SilentlyContinue
-$taskReady = $null -ne $task -and $task.State -eq 'Running'
-Add-Check 'Collector Scheduled Task' 'Local' $(if ($taskReady) { 'pass' } else { 'fail' }) $(if ($taskReady) {
-        "$($state.collectorTaskName) is running."
-    } else {
-        "$($state.collectorTaskName) is missing or stopped."
-    })
-
-$collectorExecutable = Join-Path $repositoryRoot 'otelcol\otelcol-contrib.exe'
-$collectorConfiguration = Join-Path $repositoryRoot 'otel-collector-config.yaml'
-$collectorFilesReady = (Test-Path -LiteralPath $collectorExecutable -PathType Leaf) -and
-    (Test-Path -LiteralPath $collectorConfiguration -PathType Leaf)
-Add-Check 'Collector files' 'Local' $(if ($collectorFilesReady) { 'pass' } else { 'fail' }) $(if ($collectorFilesReady) {
-        'The Collector executable and generated configuration are present.'
-    } else {
-        'The Collector executable or generated configuration is missing.'
-    })
-
-$ports = @(Get-NetTCPConnection -State Listen -LocalPort 4317, 4318 -ErrorAction SilentlyContinue |
-    Select-Object -ExpandProperty LocalPort -Unique)
+$listenerConnections = @(Get-NetTCPConnection -State Listen -LocalPort 4317, 4318 -ErrorAction SilentlyContinue)
+$ports = @($listenerConnections | Select-Object -ExpandProperty LocalPort -Unique)
 $portsReady = 4317 -in $ports -and 4318 -in $ports
 Add-Check 'OTLP listeners' 'Local' $(if ($portsReady) { 'pass' } else { 'fail' }) $(if ($portsReady) {
         'Ports 4317 and 4318 are listening.'
     } else {
         'One or both OTLP listener ports are closed.'
+    })
+
+$collectorExecutableProperty = $state.PSObject.Properties['collectorExecutablePath']
+$collectorConfigurationProperty = $state.PSObject.Properties['collectorConfigurationPath']
+$collectorTaskName = [string]$state.collectorTaskName
+$collectorExecutable = if ($null -ne $collectorExecutableProperty) {
+    [string]$collectorExecutableProperty.Value
+} else {
+    Join-Path $repositoryRoot 'otelcol\otelcol-contrib.exe'
+}
+$collectorConfiguration = if ($null -ne $collectorConfigurationProperty) {
+    [string]$collectorConfigurationProperty.Value
+} else {
+    Join-Path $repositoryRoot 'otel-collector-config.yaml'
+}
+
+if ($stateWasDiscovered -and $portsReady) {
+    $processIds = @($listenerConnections | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($processIds.Count -eq 1) {
+        $collectorProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($processIds[0])"
+        $configMatch = [regex]::Match([string]$collectorProcess.CommandLine, '--config\s+(?:"(?<path>[^"]+)"|(?<path>\S+))')
+        if ($collectorProcess.Name -eq 'otelcol-contrib.exe' -and $configMatch.Success) {
+            $collectorExecutable = [string]$collectorProcess.ExecutablePath
+            $collectorConfiguration = $configMatch.Groups['path'].Value
+            $matchingTask = Get-ScheduledTask |
+                Where-Object {
+                    @($_.Actions | Where-Object Execute -eq $collectorExecutable).Count -gt 0
+                } |
+                Select-Object -First 1
+            if ($null -ne $matchingTask) {
+                $collectorTaskName = [string]$matchingTask.TaskName
+            }
+        }
+    }
+}
+
+$task = Get-ScheduledTask -TaskName $collectorTaskName -ErrorAction SilentlyContinue
+$taskReady = $null -ne $task -and $task.State -eq 'Running'
+Add-Check 'Collector Scheduled Task' 'Local' $(if ($taskReady) { 'pass' } else { 'fail' }) $(if ($taskReady) {
+        "$collectorTaskName is running."
+    } else {
+        "$collectorTaskName is missing or stopped."
+    })
+
+$collectorFilesReady = (Test-Path -LiteralPath $collectorExecutable -PathType Leaf) -and
+    (Test-Path -LiteralPath $collectorConfiguration -PathType Leaf)
+$collectorTargetsDeployment = $false
+if ($collectorFilesReady) {
+    $collectorContent = Get-Content -LiteralPath $collectorConfiguration -Raw
+    $configuredKey = [regex]::Match($collectorContent, 'InstrumentationKey=(?<key>[0-9a-fA-F-]{36})')
+    $connectionString = Invoke-AzJson @(
+        'resource', 'show',
+        '--resource-group', [string]$state.resourceGroupName,
+        '--name', [string]$state.applicationInsightsName,
+        '--resource-type', 'Microsoft.Insights/components',
+        '--query', 'properties.ConnectionString',
+        '--output', 'json'
+    )
+    $expectedKey = [regex]::Match([string]$connectionString, 'InstrumentationKey=(?<key>[0-9a-fA-F-]{36})')
+    $collectorTargetsDeployment = $configuredKey.Success -and
+        $expectedKey.Success -and
+        $configuredKey.Groups['key'].Value -eq $expectedKey.Groups['key'].Value
+}
+Add-Check 'Collector files' 'Local' $(if ($collectorFilesReady -and $collectorTargetsDeployment) { 'pass' } else { 'fail' }) $(if (-not $collectorFilesReady) {
+        'The Collector executable or configuration is missing.'
+    } elseif (-not $collectorTargetsDeployment) {
+        'The Collector configuration targets a different or unverifiable Application Insights resource.'
+    } else {
+        "The Collector executable and configuration are present and target $($state.applicationInsightsName)."
     })
 
 $vsCodeSettingsPath = Join-Path $env:APPDATA 'Code\User\settings.json'
@@ -213,6 +359,15 @@ Add-Check 'Copilot CLI settings' 'Local' $(if ($environmentReady) { 'pass' } els
         'User-scope OTel variables are configured.'
     } else {
         'One or more User-scope OTel variables are missing.'
+    })
+
+$currentProcessEnvironmentReady = $env:COPILOT_OTEL_ENABLED -eq 'true' -and
+    $env:COPILOT_OTEL_EXPORTER_TYPE -eq 'otlp-http' -and
+    $env:OTEL_EXPORTER_OTLP_ENDPOINT -eq 'http://localhost:4318'
+Add-Check 'Copilot CLI current terminal' 'Local' $(if ($currentProcessEnvironmentReady) { 'pass' } else { 'warning' }) $(if ($currentProcessEnvironmentReady) {
+        'The current terminal has the OTel variables required by Copilot CLI.'
+    } else {
+        'User-scope variables are configured, but this terminal has stale environment values. Close it and open a new terminal before running Copilot CLI.'
     })
 
 $passCount = @($checks | Where-Object State -eq 'pass').Count
@@ -259,6 +414,7 @@ $($rows -join [Environment]::NewLine)
 </main></body></html>
 "@
 
+New-Item -ItemType Directory -Path $reportsDirectory -Force | Out-Null
 [System.IO.File]::WriteAllText($outputPath, $html, [System.Text.UTF8Encoding]::new($false))
 Write-Host "Generated $outputPath"
 Write-Host "Passing: $passCount | Attention: $warningCount | Blocking: $failCount"

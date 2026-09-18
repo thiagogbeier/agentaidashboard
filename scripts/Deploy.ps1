@@ -72,20 +72,145 @@ function Resolve-ExistingResourceName {
     )
 
     $matchingResources = @($Resources | Where-Object type -eq $ResourceType)
-    if ($matchingResources.Count -eq 0) {
-        throw "Resource group '$ResourceGroupName' already exists but has no $ResourceLabel. Refusing to add resources to a partial or unrelated environment."
-    }
-    if ($matchingResources.Count -gt 1) {
-        throw "Resource group '$ResourceGroupName' contains multiple ${ResourceLabel}s: $($matchingResources.name -join ', '). Refusing to guess which one to use."
+    $activeResources = foreach ($resource in $matchingResources) {
+        try {
+            $details = Invoke-AzJson -ArgumentList @(
+                'resource', 'show',
+                '--ids', [string]$resource.id,
+                '--output', 'json'
+            )
+        }
+        catch {
+            if ($_.Exception.Message -match 'ResourceNotFound|could not be found|was not found') {
+                Write-Warning "Ignoring stale $ResourceLabel '$($resource.name)' because it no longer exists."
+                continue
+            }
+            throw
+        }
+
+        $provisioningStateProperty = $details.properties.PSObject.Properties['provisioningState']
+        if ($null -ne $provisioningStateProperty -and
+            $provisioningStateProperty.Value -in 'Deleting', 'Deleted') {
+            Write-Warning "Ignoring $ResourceLabel '$($details.name)' because it is $($provisioningStateProperty.Value)."
+            continue
+        }
+        $details
     }
 
-    $existingName = [string]$matchingResources[0].name
+    $activeResources = @($activeResources)
+    if ($activeResources.Count -eq 0) {
+        throw "Resource group '$ResourceGroupName' already exists but has no $ResourceLabel. Refusing to add resources to a partial or unrelated environment."
+    }
+    if ($activeResources.Count -gt 1) {
+        throw "Resource group '$ResourceGroupName' contains multiple active ${ResourceLabel}s: $($activeResources.name -join ', '). Refusing to guess which one to use."
+    }
+
+    $existingName = [string]$activeResources[0].name
     if ($NameWasSpecified -and $RequestedName -ne $existingName) {
         throw "$ResourceLabel '$RequestedName' does not match existing resource '$existingName' in '$ResourceGroupName'. Refusing to create a duplicate."
     }
 
     Write-Host "Reusing existing $ResourceLabel '$existingName'." -ForegroundColor DarkGreen
     return $existingName
+}
+
+function Get-RunningOtlpCollector {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ApplicationInsightsConnectionString
+    )
+
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 4317, 4318 -ErrorAction SilentlyContinue)
+    if ($listeners.Count -eq 0) {
+        return $null
+    }
+
+    $ports = @($listeners | Select-Object -ExpandProperty LocalPort -Unique)
+    $processIds = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+    if (4317 -notin $ports -or 4318 -notin $ports -or $processIds.Count -ne 1) {
+        throw 'OTLP ports 4317 and 4318 are already partially occupied or owned by different processes. Refusing to replace or duplicate the existing runtime.'
+    }
+
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($processIds[0])"
+    if ($null -eq $process -or $process.Name -ne 'otelcol-contrib.exe') {
+        throw "OTLP ports 4317 and 4318 are already owned by process '$($process.Name)'. Refusing to replace it."
+    }
+
+    $configMatch = [regex]::Match([string]$process.CommandLine, '--config\s+(?:"(?<path>[^"]+)"|(?<path>\S+))')
+    if (-not $configMatch.Success -or
+        -not (Test-Path -LiteralPath $configMatch.Groups['path'].Value -PathType Leaf)) {
+        throw 'A running OpenTelemetry Collector owns ports 4317 and 4318, but its configuration path could not be verified.'
+    }
+
+    $configurationPath = $configMatch.Groups['path'].Value
+    $configuration = Get-Content -LiteralPath $configurationPath -Raw
+    $configuredKey = [regex]::Match($configuration, 'InstrumentationKey=(?<key>[0-9a-fA-F-]{36})')
+    $expectedKey = [regex]::Match($ApplicationInsightsConnectionString, 'InstrumentationKey=(?<key>[0-9a-fA-F-]{36})')
+    if (-not $configuredKey.Success -or
+        -not $expectedKey.Success -or
+        $configuredKey.Groups['key'].Value -ne $expectedKey.Groups['key'].Value) {
+        throw 'A running OpenTelemetry Collector already owns ports 4317 and 4318 but targets a different or unverifiable Application Insights resource.'
+    }
+
+    $executablePath = [string]$process.ExecutablePath
+    $scheduledTask = Get-ScheduledTask |
+        Where-Object {
+            @($_.Actions | Where-Object Execute -eq $executablePath).Count -gt 0
+        } |
+        Select-Object -First 1
+    if ($null -eq $scheduledTask) {
+        throw "The running OpenTelemetry Collector at '$executablePath' has no matching Scheduled Task. Refusing to take ownership of an unmanaged process."
+    }
+
+    return [pscustomobject]@{
+        ExecutablePath = $executablePath
+        ConfigurationPath = $configurationPath
+        TaskName = [string]$scheduledTask.TaskName
+    }
+}
+
+function Save-DeploymentState {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ApplicationInsightsId,
+
+        [Parameter(Mandatory)]
+        [string]$GrafanaEndpoint,
+
+        [Parameter(Mandatory)]
+        [string]$CollectorExecutablePath,
+
+        [Parameter(Mandatory)]
+        [string]$CollectorConfigurationPath,
+
+        [Parameter(Mandatory)]
+        [string]$CollectorTaskName
+    )
+
+    New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
+    $state = [ordered]@{
+        subscriptionId = $SubscriptionId
+        tenantId = $TenantId
+        subscriptionName = [string]$account.name
+        location = $Location
+        resourceGroupName = $ResourceGroupName
+        logAnalyticsWorkspaceName = $LogAnalyticsWorkspaceName
+        applicationInsightsName = $ApplicationInsightsName
+        applicationInsightsId = $ApplicationInsightsId
+        grafanaName = $GrafanaName
+        grafanaEndpoint = $GrafanaEndpoint
+        collectorVersion = $CollectorVersion
+        collectorTaskName = $CollectorTaskName
+        collectorExecutablePath = $CollectorExecutablePath
+        collectorConfigurationPath = $CollectorConfigurationPath
+        captureContent = $CaptureContent
+        discoveredAt = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+    [System.IO.File]::WriteAllText(
+        $statePath,
+        ($state | ConvertTo-Json -Depth 5),
+        [System.Text.UTF8Encoding]::new($false)
+    )
 }
 
 function Set-VsCodeSetting {
@@ -353,6 +478,23 @@ if ($resourceGroupExists) {
         -NameWasSpecified $PSBoundParameters.ContainsKey('GrafanaName')
 }
 
+$existingCollector = $null
+if ($resourceGroupExists) {
+    $existingApplicationInsightsConnectionString = (Invoke-NativeCommand -FilePath 'az' -ArgumentList @(
+            'resource', 'show',
+            '--resource-group', $ResourceGroupName,
+            '--name', $ApplicationInsightsName,
+            '--resource-type', 'Microsoft.Insights/components',
+            '--query', 'properties.ConnectionString',
+            '--output', 'tsv'
+        )).Trim()
+    $existingCollector = Get-RunningOtlpCollector `
+        -ApplicationInsightsConnectionString $existingApplicationInsightsConnectionString
+    if ($null -ne $existingCollector) {
+        Write-Host "Reusing running OpenTelemetry Collector '$($existingCollector.ExecutablePath)'." -ForegroundColor DarkGreen
+    }
+}
+
 $useGeneratedGrafanaName = [string]::IsNullOrWhiteSpace($GrafanaName)
 $grafanaNameDisplay = if ($useGeneratedGrafanaName) {
     'automatic (deterministic and subscription-unique)'
@@ -368,6 +510,12 @@ if ([string]::IsNullOrWhiteSpace($operatorObjectId)) {
 }
 
 $captureContentText = if ($CaptureContent) { 'enabled (prompts/responses may be exported)' } else { 'disabled (recommended default)' }
+$collectorDisplay = if ($null -eq $existingCollector) {
+    "v$CollectorVersion in $collectorDirectory"
+} else {
+    "existing installation at $($existingCollector.ExecutablePath)"
+}
+$collectorTaskDisplay = if ($null -eq $existingCollector) { $taskName } else { $existingCollector.TaskName }
 $plan = @"
 
 Agent AI Dashboard deployment
@@ -392,9 +540,9 @@ Access
   Grafana identity:      Monitoring Reader on this resource group only
 
 Local Windows configuration
-  Collector:             v$CollectorVersion in $collectorDirectory
+  Collector:             $collectorDisplay
   Endpoints:             localhost:4317 and localhost:4318
-  Persistence:           Scheduled Task $taskName
+  Persistence:           Scheduled Task $collectorTaskDisplay
   VS Code + CLI export:  enabled
   Capture content:       $captureContentText
 
@@ -424,9 +572,52 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Azure what-if failed. No deployment was started.'
 }
 
-$confirmation = Read-Host 'Review the what-if above. Type YES to apply only these changes; any other response does nothing'
+if ($resourceGroupExists) {
+    $existingApplicationInsights = Invoke-AzJson -ArgumentList @(
+        'resource', 'show',
+        '--resource-group', $ResourceGroupName,
+        '--name', $ApplicationInsightsName,
+        '--resource-type', 'Microsoft.Insights/components',
+        '--output', 'json'
+    )
+    $existingGrafana = Invoke-AzJson -ArgumentList @(
+        'grafana', 'show',
+        '--resource-group', $ResourceGroupName,
+        '--name', $GrafanaName,
+        '--output', 'json'
+    )
+    $stateCollectorExecutable = if ($null -eq $existingCollector) {
+        Join-Path $collectorDirectory 'otelcol-contrib.exe'
+    } else {
+        $existingCollector.ExecutablePath
+    }
+    $stateCollectorConfiguration = if ($null -eq $existingCollector) {
+        $collectorConfigPath
+    } else {
+        $existingCollector.ConfigurationPath
+    }
+    $stateCollectorTask = if ($null -eq $existingCollector) {
+        $taskName
+    } else {
+        $existingCollector.TaskName
+    }
+
+    Save-DeploymentState `
+        -ApplicationInsightsId ([string]$existingApplicationInsights.id) `
+        -GrafanaEndpoint ([string]$existingGrafana.properties.endpoint) `
+        -CollectorExecutablePath $stateCollectorExecutable `
+        -CollectorConfigurationPath $stateCollectorConfiguration `
+        -CollectorTaskName $stateCollectorTask
+    Write-Host "Saved discovered deployment state to $statePath." -ForegroundColor DarkGreen
+
+    if (Test-Path -LiteralPath $statusScriptPath -PathType Leaf) {
+        & $statusScriptPath
+    }
+}
+
+$confirmation = Read-Host 'Review the what-if above. Type YES to apply Azure and runtime changes; any other response stops after saving state and status'
 if ($confirmation.Trim() -ine 'YES') {
-    Write-Host 'Cancelled. No Azure deployment or workstation changes were made.' -ForegroundColor Yellow
+    Write-Host 'Cancelled. No Azure deployment or runtime configuration changes were made.' -ForegroundColor Yellow
     exit 0
 }
 
@@ -517,16 +708,23 @@ service:
       receivers: [otlp]
       exporters: [azure_monitor]
 "@
-[System.IO.File]::WriteAllText(
-    $collectorConfigPath,
-    $collectorConfiguration,
-    [System.Text.UTF8Encoding]::new($false)
-)
+if ($null -eq $existingCollector) {
+    [System.IO.File]::WriteAllText(
+        $collectorConfigPath,
+        $collectorConfiguration,
+        [System.Text.UTF8Encoding]::new($false)
+    )
 
-$collectorExecutable = Install-Collector -Version $CollectorVersion -Destination $collectorDirectory
-& $collectorExecutable validate --config $collectorConfigPath
-if ($LASTEXITCODE -ne 0) {
-    throw 'The generated Collector configuration failed validation.'
+    $collectorExecutable = Install-Collector -Version $CollectorVersion -Destination $collectorDirectory
+    & $collectorExecutable validate --config $collectorConfigPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The generated Collector configuration failed validation.'
+    }
+}
+else {
+    $collectorExecutable = $existingCollector.ExecutablePath
+    $collectorConfigPath = $existingCollector.ConfigurationPath
+    $taskName = $existingCollector.TaskName
 }
 
 $vsCodeSettingsPath = Join-Path $env:APPDATA 'Code\User\settings.json'
@@ -551,31 +749,20 @@ Set-VsCodeSetting -SettingsPath $vsCodeSettingsPath -Name 'github.copilot.chat.o
 [Environment]::SetEnvironmentVariable('COPILOT_OTEL_ENABLED', 'true', 'User')
 [Environment]::SetEnvironmentVariable('COPILOT_OTEL_EXPORTER_TYPE', 'otlp-http', 'User')
 [Environment]::SetEnvironmentVariable('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://localhost:4318', 'User')
+$env:COPILOT_OTEL_ENABLED = 'true'
+$env:COPILOT_OTEL_EXPORTER_TYPE = 'otlp-http'
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = 'http://localhost:4318'
 
-Set-CollectorScheduledTask -ExecutablePath $collectorExecutable -ConfigurationPath $collectorConfigPath
-
-New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
-$state = [ordered]@{
-    subscriptionId = $SubscriptionId
-    tenantId = $TenantId
-    subscriptionName = [string]$account.name
-    location = $Location
-    resourceGroupName = $ResourceGroupName
-    logAnalyticsWorkspaceName = $LogAnalyticsWorkspaceName
-    applicationInsightsName = $ApplicationInsightsName
-    applicationInsightsId = $applicationInsightsId
-    grafanaName = $GrafanaName
-    grafanaEndpoint = $grafanaEndpoint
-    collectorVersion = $CollectorVersion
-    collectorTaskName = $taskName
-    captureContent = $CaptureContent
-    deployedAt = [DateTimeOffset]::UtcNow.ToString('o')
+if ($null -eq $existingCollector) {
+    Set-CollectorScheduledTask -ExecutablePath $collectorExecutable -ConfigurationPath $collectorConfigPath
 }
-[System.IO.File]::WriteAllText(
-    $statePath,
-    ($state | ConvertTo-Json -Depth 5),
-    [System.Text.UTF8Encoding]::new($false)
-)
+
+Save-DeploymentState `
+    -ApplicationInsightsId $applicationInsightsId `
+    -GrafanaEndpoint $grafanaEndpoint `
+    -CollectorExecutablePath $collectorExecutable `
+    -CollectorConfigurationPath $collectorConfigPath `
+    -CollectorTaskName $taskName
 
 if (Test-Path -LiteralPath $statusScriptPath -PathType Leaf) {
     & $statusScriptPath
@@ -587,6 +774,6 @@ Write-Host ''
 Write-Host 'Deployment completed successfully.' -ForegroundColor Green
 Write-Host "Grafana:   $grafanaEndpoint"
 Write-Host "Dashboard: $dashboardUrl"
-Write-Host "Status:    $(Join-Path $repositoryRoot 'status.html')"
+Write-Host "Status:    $(Join-Path $repositoryRoot 'reports\status.html')"
 Write-Host ''
 Write-Host 'Restart VS Code and start a new Copilot CLI process before generating telemetry.' -ForegroundColor Yellow
