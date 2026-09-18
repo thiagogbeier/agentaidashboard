@@ -77,9 +77,7 @@ After a Portal deployment, clone the repository and run `scripts/Deploy.ps1` wit
 The script is idempotent and completes the local Collector, dashboard import/defaults, user-scoped
 settings, and status checks.
 
-> While this repository is private, Azure Portal cannot anonymously download the raw ARM template.
-> Use the PowerShell deployment for colleague testing. The button becomes directly usable after the
-> repository is public.
+The repository is public, so Azure Portal can download the ARM template directly from the button.
 
 ## Verify
 
