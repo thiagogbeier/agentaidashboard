@@ -284,9 +284,11 @@ if ([string]::IsNullOrWhiteSpace($TenantId)) {
 if ($account.tenantId -ne $TenantId -or $account.state -ne 'Enabled') {
     throw "The selected subscription is not Enabled in tenant $TenantId."
 }
-if ([string]::IsNullOrWhiteSpace($GrafanaName)) {
-    $suffix = ($SubscriptionId -replace '-', '').Substring(0, 8).ToLowerInvariant()
-    $GrafanaName = "amg-copilot-$suffix"
+$useGeneratedGrafanaName = [string]::IsNullOrWhiteSpace($GrafanaName)
+$grafanaNameDisplay = if ($useGeneratedGrafanaName) {
+    'automatic (deterministic and subscription-unique)'
+} else {
+    $GrafanaName
 }
 
 $operatorObjectId = (Invoke-NativeCommand -FilePath 'az' -ArgumentList @(
@@ -313,7 +315,7 @@ Azure
   Resource group:        $ResourceGroupName
   Log Analytics:         $LogAnalyticsWorkspaceName
   Application Insights:  $ApplicationInsightsName
-  Managed Grafana:       $GrafanaName (Standard, billable)
+  Managed Grafana:       $grafanaNameDisplay (Standard, billable)
   Dashboard:             GitHub Copilot, grafana.com ID 25053
 
 Access
@@ -344,13 +346,15 @@ foreach ($provider in 'Microsoft.OperationalInsights', 'Microsoft.Insights', 'Mi
 }
 
 $deploymentParameters = @(
-    "location=$Location",
+    "resourceLocation=$Location",
     "resourceGroupName=$ResourceGroupName",
     "logAnalyticsWorkspaceName=$LogAnalyticsWorkspaceName",
     "applicationInsightsName=$ApplicationInsightsName",
-    "grafanaName=$GrafanaName",
     "grafanaAdminPrincipalId=$operatorObjectId"
 )
+if (-not $useGeneratedGrafanaName) {
+    $deploymentParameters += "grafanaName=$GrafanaName"
+}
 
 Write-Host 'Previewing Azure changes...' -ForegroundColor Cyan
 & az deployment sub what-if `
@@ -373,6 +377,7 @@ $deploymentArguments = @(
 $deployment = Invoke-AzJson -ArgumentList $deploymentArguments
 
 $outputs = $deployment.properties.outputs
+$GrafanaName = [string]$outputs.grafanaName.value
 $grafanaEndpoint = [string]$outputs.grafanaEndpoint.value
 $applicationInsightsId = [string]$outputs.applicationInsightsId.value
 

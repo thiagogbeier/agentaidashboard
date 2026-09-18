@@ -1,7 +1,7 @@
 targetScope = 'subscription'
 
-@description('Azure region for all deployable resources.')
-param location string = 'canadacentral'
+@description('Azure region for Log Analytics, Application Insights, and Managed Grafana. This is separate from the subscription deployment record region shown by Azure Portal.')
+param resourceLocation string = 'canadacentral'
 
 @minLength(1)
 @maxLength(90)
@@ -20,22 +20,22 @@ param applicationInsightsName string = 'appi-copilot-monitoring'
 
 @minLength(1)
 @maxLength(23)
-@description('Globally unique Azure Managed Grafana name.')
-param grafanaName string
+@description('Globally unique Azure Managed Grafana name. The default is deterministic for this subscription.')
+param grafanaName string = 'amg-cop-${uniqueString(subscription().subscriptionId)}'
 
-@description('Optional object ID of the user who receives Grafana Admin at Grafana-resource scope.')
-param grafanaAdminPrincipalId string = ''
+@description('Object ID that receives Grafana Admin at Grafana-resource scope. Defaults to the identity running this deployment; clear it to skip the assignment.')
+param grafanaAdminPrincipalId string = deployer().objectId
 
 resource monitoringResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
-  location: location
+  location: resourceLocation
 }
 
 module monitoring 'resources.bicep' = {
   name: 'agent-ai-dashboard'
   scope: monitoringResourceGroup
   params: {
-    location: location
+    location: resourceLocation
     logAnalyticsWorkspaceName: logAnalyticsWorkspaceName
     applicationInsightsName: applicationInsightsName
     grafanaName: grafanaName
@@ -48,4 +48,5 @@ output logAnalyticsWorkspaceId string = monitoring.outputs.logAnalyticsWorkspace
 output applicationInsightsId string = monitoring.outputs.applicationInsightsId
 output applicationInsightsAppId string = monitoring.outputs.applicationInsightsAppId
 output grafanaId string = monitoring.outputs.grafanaId
+output grafanaName string = monitoring.outputs.grafanaName
 output grafanaEndpoint string = monitoring.outputs.grafanaEndpoint

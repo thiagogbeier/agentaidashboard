@@ -73,11 +73,21 @@ organization's data-handling requirements first.
 
 The **Deploy to Azure** button deploys the cloud resources from `infra/azuredeploy.json`.
 
+The form suggests a deterministic, subscription-unique Grafana name and defaults **Grafana Admin
+Principal Id** to the identity launching the deployment. You can override either value; clear the
+principal ID only if you intentionally want to skip the Grafana Admin assignment.
+
+Azure Portal's **Region** stores the subscription-level deployment record. **Resource Location**
+controls where the monitoring resources are created; the two values may differ.
+
 After a Portal deployment, clone the repository and run `scripts/Deploy.ps1` with the same names.
 The script is idempotent and completes the local Collector, dashboard import/defaults, user-scoped
 settings, and status checks.
 
 The repository is public, so Azure Portal can download the ARM template directly from the button.
+The Portal may summarize the template as **2 resources** because it counts the resource group and
+its nested deployment at subscription scope; the nested deployment contains the monitoring
+resources and role assignments listed above.
 
 ## Verify
 

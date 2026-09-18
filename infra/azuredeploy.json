@@ -5,15 +5,15 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "11336316296317772195"
+      "templateHash": "2333641418590729124"
     }
   },
   "parameters": {
-    "location": {
+    "resourceLocation": {
       "type": "string",
       "defaultValue": "canadacentral",
       "metadata": {
-        "description": "Azure region for all deployable resources."
+        "description": "Azure region for Log Analytics, Application Insights, and Managed Grafana. This is separate from the subscription deployment record region shown by Azure Portal."
       }
     },
     "resourceGroupName": {
@@ -45,17 +45,18 @@
     },
     "grafanaName": {
       "type": "string",
+      "defaultValue": "[format('amg-cop-{0}', uniqueString(subscription().subscriptionId))]",
       "minLength": 1,
       "maxLength": 23,
       "metadata": {
-        "description": "Globally unique Azure Managed Grafana name."
+        "description": "Globally unique Azure Managed Grafana name. The default is deterministic for this subscription."
       }
     },
     "grafanaAdminPrincipalId": {
       "type": "string",
-      "defaultValue": "",
+      "defaultValue": "[deployer().objectId]",
       "metadata": {
-        "description": "Optional object ID of the user who receives Grafana Admin at Grafana-resource scope."
+        "description": "Object ID that receives Grafana Admin at Grafana-resource scope. Defaults to the identity running this deployment; clear it to skip the assignment."
       }
     }
   },
@@ -64,7 +65,7 @@
       "type": "Microsoft.Resources/resourceGroups",
       "apiVersion": "2024-03-01",
       "name": "[parameters('resourceGroupName')]",
-      "location": "[parameters('location')]"
+      "location": "[parameters('resourceLocation')]"
     },
     {
       "type": "Microsoft.Resources/deployments",
@@ -78,7 +79,7 @@
         "mode": "Incremental",
         "parameters": {
           "location": {
-            "value": "[parameters('location')]"
+            "value": "[parameters('resourceLocation')]"
           },
           "logAnalyticsWorkspaceName": {
             "value": "[parameters('logAnalyticsWorkspaceName')]"
@@ -100,7 +101,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "110779277909547606"
+              "templateHash": "3002988107630702603"
             }
           },
           "parameters": {
@@ -197,7 +198,6 @@
               "name": "[guid(resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName')), parameters('grafanaAdminPrincipalId'), variables('grafanaAdminRoleId'))]",
               "properties": {
                 "principalId": "[parameters('grafanaAdminPrincipalId')]",
-                "principalType": "User",
                 "roleDefinitionId": "[variables('grafanaAdminRoleId')]"
               },
               "dependsOn": [
@@ -221,6 +221,10 @@
             "grafanaId": {
               "type": "string",
               "value": "[resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName'))]"
+            },
+            "grafanaName": {
+              "type": "string",
+              "value": "[parameters('grafanaName')]"
             },
             "grafanaEndpoint": {
               "type": "string",
@@ -254,6 +258,10 @@
     "grafanaId": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'agent-ai-dashboard'), '2025-04-01').outputs.grafanaId.value]"
+    },
+    "grafanaName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'agent-ai-dashboard'), '2025-04-01').outputs.grafanaName.value]"
     },
     "grafanaEndpoint": {
       "type": "string",

@@ -75,7 +75,6 @@ resource grafanaAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if 
   scope: grafana
   properties: {
     principalId: grafanaAdminPrincipalId
-    principalType: 'User'
     roleDefinitionId: grafanaAdminRoleId
   }
 }
@@ -84,4 +83,5 @@ output logAnalyticsWorkspaceId string = logAnalytics.id
 output applicationInsightsId string = applicationInsights.id
 output applicationInsightsAppId string = applicationInsights.properties.AppId
 output grafanaId string = grafana.id
+output grafanaName string = grafana.name
 output grafanaEndpoint string = grafana.properties.endpoint
