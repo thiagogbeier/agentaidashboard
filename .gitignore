@@ -1,0 +1,17 @@
+# Generated Azure artifacts
+infra/*.bicep.lock
+
+# Local deployment/runtime state
+.state/
+otelcol/
+otel-collector-config.yaml
+status.html
+*.log
+*.bak
+*.tmp
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

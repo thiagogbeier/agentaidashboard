@@ -1,0 +1,58 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$null,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors) {
+              $failed = $true
+              $errors | Write-Error
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Build Bicep
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az bicep install
+            az bicep build --file infra/main.bicep --outfile /tmp/azuredeploy.json
+
+      - name: Reject common secret patterns
+        shell: pwsh
+        run: |
+          $patterns = @(
+            'InstrumentationKey=[0-9a-fA-F-]{36}',
+            'glsa_[A-Za-z0-9_-]+',
+            'client_secret\s*[:=]\s*["''][^"'']+'
+          )
+          $files = Get-ChildItem -Recurse -File |
+            Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
+          foreach ($pattern in $patterns) {
+            $matches = $files | Select-String -Pattern $pattern
+            if ($matches) {
+              $matches
+              throw "Potential secret pattern found: $pattern"
+            }
+          }

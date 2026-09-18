@@ -1,0 +1,12 @@
+// Merge into your VS Code settings.json (User or Workspace scope).
+// Enables OpenTelemetry export from GitHub Copilot Chat to the local
+// OpenTelemetry Collector started via docker-compose.yml in this folder.
+{
+  "github.copilot.chat.otel.enabled": true,
+  "github.copilot.chat.otel.exporterType": "otlp-http",
+  "github.copilot.chat.otel.otlpEndpoint": "http://localhost:4318",
+
+  // Set to false if you don't want prompt/response text captured in telemetry
+  // (e.g. sensitive-content environments). true gives richer dashboard panels.
+  "github.copilot.chat.otel.captureContent": true
+}

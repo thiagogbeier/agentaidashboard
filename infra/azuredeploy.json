@@ -1,0 +1,263 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "11336316296317772195"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "canadacentral",
+      "metadata": {
+        "description": "Azure region for all deployable resources."
+      }
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "rg-copilot-monitoring",
+      "minLength": 1,
+      "maxLength": 90,
+      "metadata": {
+        "description": "Resource group that contains the complete monitoring stack."
+      }
+    },
+    "logAnalyticsWorkspaceName": {
+      "type": "string",
+      "defaultValue": "law-copilot-monitoring",
+      "minLength": 1,
+      "maxLength": 63,
+      "metadata": {
+        "description": "Log Analytics workspace name."
+      }
+    },
+    "applicationInsightsName": {
+      "type": "string",
+      "defaultValue": "appi-copilot-monitoring",
+      "minLength": 1,
+      "maxLength": 260,
+      "metadata": {
+        "description": "Workspace-based Application Insights component name."
+      }
+    },
+    "grafanaName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 23,
+      "metadata": {
+        "description": "Globally unique Azure Managed Grafana name."
+      }
+    },
+    "grafanaAdminPrincipalId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional object ID of the user who receives Grafana Admin at Grafana-resource scope."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "agent-ai-dashboard",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "logAnalyticsWorkspaceName": {
+            "value": "[parameters('logAnalyticsWorkspaceName')]"
+          },
+          "applicationInsightsName": {
+            "value": "[parameters('applicationInsightsName')]"
+          },
+          "grafanaName": {
+            "value": "[parameters('grafanaName')]"
+          },
+          "grafanaAdminPrincipalId": {
+            "value": "[parameters('grafanaAdminPrincipalId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "110779277909547606"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "logAnalyticsWorkspaceName": {
+              "type": "string"
+            },
+            "applicationInsightsName": {
+              "type": "string"
+            },
+            "grafanaName": {
+              "type": "string"
+            },
+            "grafanaAdminPrincipalId": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "monitoringReaderRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')]",
+            "grafanaAdminRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '22926164-76b3-42b3-bc55-97df8dab3e41')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2022-10-01",
+              "name": "[parameters('logAnalyticsWorkspaceName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": 30,
+                "features": {
+                  "enableLogAccessUsingOnlyResourcePermissions": true
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[parameters('applicationInsightsName')]",
+              "location": "[parameters('location')]",
+              "kind": "web",
+              "properties": {
+                "Application_Type": "web",
+                "Flow_Type": "Bluefield",
+                "IngestionMode": "LogAnalytics",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]",
+                "RetentionInDays": 90
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Dashboard/grafana",
+              "apiVersion": "2023-09-01",
+              "name": "[parameters('grafanaName')]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "apiKey": "Enabled",
+                "autoGeneratedDomainNameLabelScope": "TenantReuse",
+                "deterministicOutboundIP": "Disabled",
+                "publicNetworkAccess": "Enabled",
+                "zoneRedundancy": "Disabled"
+              },
+              "sku": {
+                "name": "Standard"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName')), variables('monitoringReaderRoleId'))]",
+              "properties": {
+                "principalId": "[reference(resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName')), '2023-09-01', 'full').identity.principalId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[variables('monitoringReaderRoleId')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('grafanaAdminPrincipalId')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName'))]",
+              "name": "[guid(resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName')), parameters('grafanaAdminPrincipalId'), variables('grafanaAdminRoleId'))]",
+              "properties": {
+                "principalId": "[parameters('grafanaAdminPrincipalId')]",
+                "principalType": "User",
+                "roleDefinitionId": "[variables('grafanaAdminRoleId')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+            },
+            "applicationInsightsId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/components', parameters('applicationInsightsName'))]"
+            },
+            "applicationInsightsAppId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Insights/components', parameters('applicationInsightsName')), '2020-02-02').AppId]"
+            },
+            "grafanaId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName'))]"
+            },
+            "grafanaEndpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Dashboard/grafana', parameters('grafanaName')), '2023-09-01').endpoint]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "resourceGroupId": {
+      "type": "string",
+      "value": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'agent-ai-dashboard'), '2025-04-01').outputs.logAnalyticsWorkspaceId.value]"
+    },
+    "applicationInsightsId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'agent-ai-dashboard'), '2025-04-01').outputs.applicationInsightsId.value]"
+    },
+    "applicationInsightsAppId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'agent-ai-dashboard'), '2025-04-01').outputs.applicationInsightsAppId.value]"
+    },
+    "grafanaId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'agent-ai-dashboard'), '2025-04-01').outputs.grafanaId.value]"
+    },
+    "grafanaEndpoint": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'agent-ai-dashboard'), '2025-04-01').outputs.grafanaEndpoint.value]"
+    }
+  }
+}
