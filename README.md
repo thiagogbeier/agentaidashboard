@@ -93,9 +93,10 @@ cd agentaidashboard
 pwsh -NoProfile -File .\scripts\Deploy.ps1
 ```
 
-The script first performs read-only discovery and prints the complete deployment plan. Check the
-subscription, region, resource names, cost notice, and content-capture setting. If they are correct,
-type exactly `YES` and press Enter. Any other response cancels without making changes.
+The script first performs read-only discovery, prints the complete deployment plan, and runs Azure
+`what-if`. Review both the plan and the resource changes. If they are correct, type `YES` and press
+Enter; capitalization does not matter. Any other response cancels without making Azure deployment
+or workstation changes.
 
 The deployment can take several minutes. Keep the PowerShell window open until it displays
 `Deployment completed successfully` and prints the **Grafana**, **Dashboard**, and **Status** paths.
@@ -109,7 +110,18 @@ The script also:
 - sets user-level environment variables for GitHub Copilot CLI; and
 - starts the Collector as the `AgentAIDashboard-OtelCollector` Scheduled Task.
 
-Common overrides:
+> **No manual Grafana import is required.** `Deploy.ps1` checks for dashboard UID
+> `GitHubCopilot`, imports gallery dashboard `25053` when it is missing, and sets the Azure Monitor
+> data source, subscription, resource group, and Application Insights defaults. Only troubleshoot
+> the import if the script reports an error or the status page says the dashboard is missing.
+>
+> **Existing deployments are reused.** Before showing the deployment plan, the script checks the
+> target resource group. If it exists, it must contain exactly one Managed Grafana resource, one
+> Application Insights resource, and one Log Analytics workspace. The script reuses their actual
+> names. It stops before `what-if` if a resource is missing, multiple resources of the same type
+> exist, or an explicitly supplied name does not match.
+
+Common overrides for a new deployment:
 
 ```powershell
 .\scripts\Deploy.ps1 `
@@ -155,6 +167,12 @@ Open the **Dashboard** URL printed by `Deploy.ps1`. Sign in with the same Azure 
 If the dashboard initially shows **No data**, wait a few more minutes, generate another Copilot
 prompt, and run the status command again. See
 [Troubleshooting](docs/TROUBLESHOOTING.md) if any status item still fails.
+
+The imported **GitHub Copilot** dashboard should look similar to this after telemetry arrives. Confirm
+that **Data Source**, **Subscription**, **Resource Group**, and **Application Insights** contain the
+values selected during deployment:
+
+![GitHub Copilot dashboard in Azure Managed Grafana with the Azure Monitor data source and deployment resource selectors configured](docs/images/grafana-dashboard.png)
 
 ## Azure Portal deployment
 
@@ -205,7 +223,8 @@ pwsh -NoProfile -File .\scripts\Deploy.ps1 -SubscriptionId '<subscription-guid>'
 
 After a Portal deployment, clone the repository and run `scripts/Deploy.ps1` with the same names.
 The script is idempotent and completes the local Collector, dashboard import/defaults, user-scoped
-settings, and status checks.
+settings, and status checks. If the resource group contains one Managed Grafana resource and you
+omit `-GrafanaName`, the script automatically reuses that resource. It does not create another one.
 
 If you changed any field away from its default in the Portal, pass matching overrides to
 `Deploy.ps1` instead of the single-parameter command above — match each parameter to the value you
@@ -241,7 +260,28 @@ future checks:
 The generated `status.html` checks Azure resources, the Grafana dashboard, recent telemetry, the
 Scheduled Task, OTLP listener ports, and Copilot CLI settings.
 
-For direct Azure verification, use the queries in [docs/KQL.md](docs/KQL.md).
+For direct Azure verification, open the deployed Application Insights resource in Azure Portal,
+select **Monitoring** > **Logs**, paste the following query, and select **Run**:
+
+```kusto
+union dependencies, traces, customMetrics
+| where timestamp > ago(24h)
+| summarize Events=count(), LastSeen=max(timestamp) by itemType, cloud_RoleName
+| order by LastSeen desc
+```
+
+After Copilot telemetry arrives, the results include rows with the `copilot-chat` or
+`github-copilot` cloud role:
+
+![Application Insights Logs query showing Copilot telemetry grouped by item type and cloud role](docs/images/application-insightslogs-kql.png)
+
+The Application Insights **Overview** page confirms that the resource is available. Its standard
+request charts may remain empty because Copilot telemetry is primarily inspected through Logs and
+the imported Grafana dashboard:
+
+![Application Insights Overview page showing the standard request, response time, and availability charts](docs/images/application-insights1.png)
+
+For additional direct Azure verification queries, see the [KQL query runbook](docs/KQL.md).
 
 ## Remove the deployment and stop Azure charges
 

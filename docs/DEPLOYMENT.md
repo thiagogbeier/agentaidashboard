@@ -5,19 +5,24 @@
 `scripts/Deploy.ps1`:
 
 1. Reads the active Azure CLI subscription and tenant.
-2. Generates a deterministic Grafana name if none is supplied.
-3. Displays every Azure and local setting.
-4. Requires typing exactly `YES`.
-5. Registers the required Azure providers.
+2. Checks the target resource group for an existing deployment.
+3. Reuses its single Managed Grafana resource and refuses resource-name conflicts that would create
+   duplicate Grafana, Application Insights, or Log Analytics resources.
+4. Generates a deterministic Grafana name only when the resource group has no Grafana resource and
+   no name is supplied.
+5. Displays every Azure and local setting.
 6. Runs subscription-scope Bicep `what-if`.
-7. Deploys the Azure resources.
-8. Imports Grafana dashboard `25053` and saves its resource defaults.
-9. Downloads OpenTelemetry Collector Contrib v0.161.0 and validates its SHA-256 checksum.
-10. Configures VS Code Copilot Chat and GitHub Copilot CLI.
-11. Registers `AgentAIDashboard-OtelCollector` as an at-logon Scheduled Task.
-12. Writes ignored local deployment state and generates `status.html`.
+7. Requires typing `YES`, case-insensitively, after the user reviews the preview.
+8. Registers the required Azure providers.
+9. Deploys or reconciles the Azure resources.
+10. Imports Grafana dashboard `25053` when missing and saves its resource defaults.
+11. Downloads OpenTelemetry Collector Contrib v0.161.0 and validates its SHA-256 checksum.
+12. Configures VS Code Copilot Chat and GitHub Copilot CLI.
+13. Registers `AgentAIDashboard-OtelCollector` as an at-logon Scheduled Task.
+14. Writes ignored local deployment state and generates `status.html`.
 
-The script is idempotent. Running it again with the same parameters reconciles the deployment.
+The script is idempotent. Running it again reconciles the deployment without creating another
+monitoring resource when the target resource group already contains one of that type.
 
 ## Azure Portal flow
 

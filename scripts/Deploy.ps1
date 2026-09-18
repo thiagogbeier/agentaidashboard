@@ -53,6 +53,41 @@ function Invoke-AzJson {
     return (Invoke-NativeCommand -FilePath 'az' -ArgumentList $ArgumentList) | ConvertFrom-Json
 }
 
+function Resolve-ExistingResourceName {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$Resources,
+
+        [Parameter(Mandatory)]
+        [string]$ResourceType,
+
+        [Parameter(Mandatory)]
+        [string]$ResourceLabel,
+
+        [AllowEmptyString()]
+        [string]$RequestedName,
+
+        [Parameter(Mandatory)]
+        [bool]$NameWasSpecified
+    )
+
+    $matchingResources = @($Resources | Where-Object type -eq $ResourceType)
+    if ($matchingResources.Count -eq 0) {
+        throw "Resource group '$ResourceGroupName' already exists but has no $ResourceLabel. Refusing to add resources to a partial or unrelated environment."
+    }
+    if ($matchingResources.Count -gt 1) {
+        throw "Resource group '$ResourceGroupName' contains multiple ${ResourceLabel}s: $($matchingResources.name -join ', '). Refusing to guess which one to use."
+    }
+
+    $existingName = [string]$matchingResources[0].name
+    if ($NameWasSpecified -and $RequestedName -ne $existingName) {
+        throw "$ResourceLabel '$RequestedName' does not match existing resource '$existingName' in '$ResourceGroupName'. Refusing to create a duplicate."
+    }
+
+    Write-Host "Reusing existing $ResourceLabel '$existingName'." -ForegroundColor DarkGreen
+    return $existingName
+}
+
 function Set-VsCodeSetting {
     param(
         [Parameter(Mandatory)]
@@ -284,6 +319,40 @@ if ([string]::IsNullOrWhiteSpace($TenantId)) {
 if ($account.tenantId -ne $TenantId -or $account.state -ne 'Enabled') {
     throw "The selected subscription is not Enabled in tenant $TenantId."
 }
+
+$resourceGroupExists = (Invoke-NativeCommand -FilePath 'az' -ArgumentList @(
+        'group', 'exists',
+        '--name', $ResourceGroupName,
+        '--output', 'tsv'
+    )).Trim() -eq 'true'
+
+if ($resourceGroupExists) {
+    $existingResources = @(Invoke-AzJson -ArgumentList @(
+            'resource', 'list',
+            '--resource-group', $ResourceGroupName,
+            '--output', 'json'
+        ))
+
+    $LogAnalyticsWorkspaceName = Resolve-ExistingResourceName `
+        -Resources $existingResources `
+        -ResourceType 'Microsoft.OperationalInsights/workspaces' `
+        -ResourceLabel 'Log Analytics workspace' `
+        -RequestedName $LogAnalyticsWorkspaceName `
+        -NameWasSpecified $PSBoundParameters.ContainsKey('LogAnalyticsWorkspaceName')
+    $ApplicationInsightsName = Resolve-ExistingResourceName `
+        -Resources $existingResources `
+        -ResourceType 'Microsoft.Insights/components' `
+        -ResourceLabel 'Application Insights resource' `
+        -RequestedName $ApplicationInsightsName `
+        -NameWasSpecified $PSBoundParameters.ContainsKey('ApplicationInsightsName')
+    $GrafanaName = Resolve-ExistingResourceName `
+        -Resources $existingResources `
+        -ResourceType 'Microsoft.Dashboard/grafana' `
+        -ResourceLabel 'Managed Grafana resource' `
+        -RequestedName $GrafanaName `
+        -NameWasSpecified $PSBoundParameters.ContainsKey('GrafanaName')
+}
+
 $useGeneratedGrafanaName = [string]::IsNullOrWhiteSpace($GrafanaName)
 $grafanaNameDisplay = if ($useGeneratedGrafanaName) {
     'automatic (deterministic and subscription-unique)'
@@ -333,17 +402,6 @@ The deployment is idempotent and does not delete resources.
 "@
 
 Write-Host $plan
-$confirmation = Read-Host 'Type YES to deploy this configuration'
-if ($confirmation -cne 'YES') {
-    Write-Host 'Cancelled. No changes were made.' -ForegroundColor Yellow
-    exit 0
-}
-
-foreach ($provider in 'Microsoft.OperationalInsights', 'Microsoft.Insights', 'Microsoft.Dashboard') {
-    Invoke-NativeCommand -FilePath 'az' -ArgumentList @(
-        'provider', 'register', '--namespace', $provider, '--wait', '--output', 'none'
-    ) -AllowEmptyOutput | Out-Null
-}
 
 $deploymentParameters = @(
     "resourceLocation=$Location",
@@ -364,6 +422,18 @@ Write-Host 'Previewing Azure changes...' -ForegroundColor Cyan
     --parameters $deploymentParameters
 if ($LASTEXITCODE -ne 0) {
     throw 'Azure what-if failed. No deployment was started.'
+}
+
+$confirmation = Read-Host 'Review the what-if above. Type YES to apply only these changes; any other response does nothing'
+if ($confirmation.Trim() -ine 'YES') {
+    Write-Host 'Cancelled. No Azure deployment or workstation changes were made.' -ForegroundColor Yellow
+    exit 0
+}
+
+foreach ($provider in 'Microsoft.OperationalInsights', 'Microsoft.Insights', 'Microsoft.Dashboard') {
+    Invoke-NativeCommand -FilePath 'az' -ArgumentList @(
+        'provider', 'register', '--namespace', $provider, '--wait', '--output', 'none'
+    ) -AllowEmptyOutput | Out-Null
 }
 
 Write-Host 'Deploying Azure resources...' -ForegroundColor Cyan

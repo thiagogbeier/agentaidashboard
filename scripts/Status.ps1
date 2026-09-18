@@ -11,7 +11,7 @@ $statePath = Join-Path $repositoryRoot '.state\deployment.json'
 $outputPath = Join-Path $repositoryRoot 'status.html'
 
 if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
-    throw "Deployment state not found. Run scripts\Deploy.ps1 first."
+    throw "Local deployment state was not found. An Azure Portal deployment creates only the Azure resources. Run scripts\Deploy.ps1 to validate and reuse the existing resources, configure this workstation, and generate the state file."
 }
 
 $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
